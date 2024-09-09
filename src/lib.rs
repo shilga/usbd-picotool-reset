@@ -61,6 +61,28 @@ impl Config for DefaultConfig {
     const BOOTSEL_ACTIVITY_LED: Option<usize> = None;
 }
 
+#[cfg(all(feature = "rp2040", feature = "rp235x"))]
+compile_error!("feature \"rp2040\" and feature \"rp235x\" cannot be enabled at the same time");
+
+#[cfg(feature = "rp235x")]
+fn reset_to_bootsel(usb_activity_gpio_pin_mask: u32, disable_interface_mask: u32) {
+    let mut flags = disable_interface_mask;
+    if usb_activity_gpio_pin_mask != 0 {
+        flags |= 0x20;
+    }
+    rp235x_hal::rom_data::reboot(
+        0x102, 10, flags, usb_activity_gpio_pin_mask
+    );
+}
+
+#[cfg(feature = "rp2040")]
+fn reset_to_bootsel(usb_activity_gpio_pin_mask: u32, disable_interface_mask: u32) {
+    rp2040_hal::rom_data::reset_to_usb_boot(
+        usb_activity_gpio_pin_mask,
+        disable_interface_mask,
+    );
+}
+
 /// UsbClass implementation for Picotool's reset feature.
 pub struct PicoToolReset<'a, B: UsbBus, C: Config = DefaultConfig> {
     intf: InterfaceNumber,
@@ -110,14 +132,11 @@ impl<B: UsbBus, C: Config> usb_device::class::UsbClass<B> for PicoToolReset<'_, 
 
         match req.request {
             RESET_REQUEST_BOOTSEL => {
-                let mut gpio_mask = C::BOOTSEL_ACTIVITY_LED.map(|led| 1 << led).unwrap_or(0);
+                let mut gpio_mask:u32 = C::BOOTSEL_ACTIVITY_LED.map(|led| 1 << led).unwrap_or(0);
                 if req.value & 0x100 != 0 {
                     gpio_mask = 1 << (req.value >> 9);
                 }
-                rp2040_hal::rom_data::reset_to_usb_boot(
-                    gpio_mask,
-                    u32::from(req.value & 0x7F) | C::INTERFACE_DISABLE.into(),
-                );
+                reset_to_bootsel(gpio_mask, u32::from(req.value & 0x7F) | C::INTERFACE_DISABLE.into());
                 // no-need to accept/reject, we'll reset the device anyway
                 unreachable!()
             }
